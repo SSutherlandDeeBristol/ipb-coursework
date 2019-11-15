@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import random
 import sys
 
-num_iterations = 100
-batch_size = 10
+num_iterations = 1000
+batch_size = 100
 
 num_basis = 256
 learning_rate = 0.01
@@ -41,10 +41,11 @@ def cost(A, image, B):
 # image (basis_width * basis_height, ) array
 def cost_prime(coefficients, basis_functions, image):
     reconstructed_image = np.zeros(image.shape)
+
     for i in range(num_basis):
         reconstructed_image += coefficients[i] * basis_functions[i]
 
-    image_error = sum([i - b for (i,b) in zip(image, reconstructed_image)])
+    image_error = sum([(i - b)**2 for (i,b) in zip(image, reconstructed_image)])
 
     sparsity = (l / sigma) * sum([s(a/sigma) for a in coefficients])
 
@@ -76,6 +77,8 @@ def gradient_descent(coefficients, basis_functions, image):
 
     cost = cost_prime(coefficients, basis_functions, image)
 
+    print(str.format('cost: {}', cost))
+
     while niters < 100:
         gradient = cost_gradient(new_coefficients, basis_functions, image)
 
@@ -85,8 +88,12 @@ def gradient_descent(coefficients, basis_functions, image):
 
         print(str.format('descent iters: {}', niters))
 
-        new_cost = cost_prime(coefficients, basis_functions, image)
-        if (cost / new_cost) < 1e-2:
+        new_cost = cost_prime(new_coefficients, basis_functions, image)
+
+        print(new_cost)
+
+        if ((cost - new_cost) / new_cost) < 1e-2:
+            print(new_coefficients)
             return new_coefficients
         else:
             cost = new_cost
@@ -97,6 +104,9 @@ if __name__ == "__main__":
     mat = scipy.io.loadmat('IMAGES.mat')
     mat = np.array(np.transpose(mat['IMAGES'], (2,0,1)))
 
+    mat -= mat.min()
+    mat *= 1/mat.max()
+
     B = np.random.rand(num_basis, basis_height * basis_width)
 
     # iterate 1000 times
@@ -104,23 +114,20 @@ if __name__ == "__main__":
         # choose a random image
         image = mat[random.randint(0, mat.shape[0] - 1)]
 
-        subimages = {}
-
-        I = np.zeros((batch_size, basis_height * basis_width))
+        subimages = np.zeros((batch_size, basis_height * basis_width))
 
         # choose 100 random sub images
         for i in range(batch_size):
             x = random.randint(0, image_width - basis_width - 1)
             y = random.randint(0, image_height - basis_height - 1)
-            subimages[i] = image[x:x+basis_width,y:y+basis_height]
-            I[i] = np.reshape(subimages[i], (basis_height * basis_width,))
+            subimages[i] = np.reshape(image[x:x+basis_width,y:y+basis_height], (basis_height * basis_width,))
 
         # calculate coefficients
 
         A = np.random.rand(batch_size, num_basis)
 
         for i in range(batch_size):
-            res = gradient_descent(A[i], B, I[i])
+            res = gradient_descent(A[i], B, subimages[i])
             A[i] = res
             # res = optimize.minimize(cost_prime, A[i], (B, I[i]), method='CG', tol=0.01, options={'maxiter':100})
             # print(res.message)
@@ -130,7 +137,7 @@ if __name__ == "__main__":
 
         # calculate residual error
 
-        R = I - (sum(A) / batch_size).dot(B)
+        R = subimages - (sum(A) / batch_size).dot(B)
 
         # update the base functions
 
