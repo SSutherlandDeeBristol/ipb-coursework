@@ -1,113 +1,59 @@
 import numpy as np
 import scipy.io
 import scipy.sparse.linalg as linalg
-import scipy.optimize as optimize
+from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 import random
 import sys
+import math
 
-num_iterations = 1000
+num_iterations = 4000
 batch_size = 100
 
-num_basis = 256
-learning_rate = 0.01
-sigma = 0.316
-l = 1
+num_basis = 64
+learning_rate = 5e-2
+ista_learning_rate = 1e-2
+
+shrinkage_factor = 5e-3
 
 image_width = 512
 image_height = 512
 
-basis_width = 16
-basis_height = 16
+basis_width = 8
+basis_height = 8
 
-def s(x):
-    return -np.log(1.0 + x**2)
+def normalize(X):
+    return (X / math.sqrt(sum([y**2 for y in X.reshape(num_basis * basis_width * basis_height,)])))
 
-def s_prime(x):
-    return (2*x) / (1.0 + x**2)
+def shrinkage(X):
+    return (np.array(map(lambda z: map(lambda y: max(y, 0), z), (X - shrinkage_factor)))
+          - np.array(map(lambda z: map(lambda y: max(y, 0), z), (-1 * X - shrinkage_factor))))
 
-def sparseness(A):
-    return -sum([s(a/sigma) for a in A])
-
-def preserve_info(image, A, B):
-    return -sum([(image[x][y] - sum([a * b[x][y]
-        for a,b in zip(A,B)]))**2 for x in range(basis_width) for y in range(basis_height)])
-
-def cost(A, image, B):
-    return -preserve_info(image, A, B) - l * sparseness(B)
-
-# coefficients (num_basis,) array
 # basis_functions (num_basis, basis_width * basis_height) array
-# image (basis_width * basis_height, ) array
-def cost_prime(coefficients, basis_functions, image):
-    reconstructed_image = np.zeros(image.shape)
+# image (batch_size, basis_width * basis_height) array
+def ista(images, basis_functions, E):
+    weights = np.random.uniform(0, 1, (batch_size, num_basis))
 
-    for i in range(num_basis):
-        reconstructed_image += coefficients[i] * basis_functions[i]
+    for e in range(E):
+        # calculate gradient
+        reconstructed_images = weights.dot(basis_functions)
+        gradient = -2.0 * ((images - reconstructed_images).dot(basis_functions.transpose()))
+        # adjust weights
+        weights = weights - ista_learning_rate * gradient
+        # ensure sparsity
+        weights = shrinkage(weights)
 
-    image_error = sum([(i - b)**2 for (i,b) in zip(image, reconstructed_image)])
-
-    sparsity = (l / sigma) * sum([s(a/sigma) for a in coefficients])
-
-    return image_error + sparsity
-
-# coefficients (num_basis,) array
-# basis_functions (num_basis, basis_width * basis_height) array
-# image (basis_width * basis_height, ) array
-def cost_gradient(coefficients, basis_functions, image):
-    gradient_vector = np.zeros(coefficients.shape)
-
-    for i in range(num_basis):
-        b_i = sum(np.multiply(basis_functions[i], image))
-        C = 0
-        for j in range(num_basis):
-            C += coefficients[j] * sum(np.multiply(basis_functions[i], basis_functions[j]))
-        D = -(l / sigma) * s_prime(coefficients[i] /sigma)
-        gradient_vector[i] = learning_rate * (b_i - C - D)
-
-    return gradient_vector
-
-# coefficients (num_basis,) array
-# basis_functions (num_basis, basis_width * basis_height) array
-# image (basis_width * basis_height, ) array
-def gradient_descent(coefficients, basis_functions, image):
-    new_coefficients = coefficients.copy()
-    gradient = np.ones(coefficients.shape)
-    niters = 0
-
-    cost = cost_prime(coefficients, basis_functions, image)
-
-    print(str.format('cost: {}', cost))
-
-    while niters < 100:
-        gradient = cost_gradient(new_coefficients, basis_functions, image)
-
-        new_coefficients += learning_rate * gradient
-
-        niters += 1
-
-        print(str.format('descent iters: {}', niters))
-
-        new_cost = cost_prime(new_coefficients, basis_functions, image)
-
-        print(new_cost)
-
-        if ((cost - new_cost) / new_cost) < 1e-2:
-            print(new_coefficients)
-            return new_coefficients
-        else:
-            cost = new_cost
-
-    return new_coefficients
+    return weights
 
 if __name__ == "__main__":
     mat = scipy.io.loadmat('IMAGES.mat')
     mat = np.array(np.transpose(mat['IMAGES'], (2,0,1)))
 
-    mat -= mat.min()
-    mat *= 1/mat.max()
+    #mat -= mat.min()
+    #mat *= 1/mat.max()
 
     B = np.random.rand(num_basis, basis_height * basis_width)
+    B = normalize(B)
 
     # iterate 1000 times
     for j in range(num_iterations):
@@ -123,34 +69,27 @@ if __name__ == "__main__":
             subimages[i] = np.reshape(image[x:x+basis_width,y:y+basis_height], (basis_height * basis_width,))
 
         # calculate coefficients
+        R = ista(subimages, B, 300)
 
-        A = np.random.rand(batch_size, num_basis)
+        reconstructed_images = R.dot(B)
 
-        for i in range(batch_size):
-            res = gradient_descent(A[i], B, subimages[i])
-            A[i] = res
-            # res = optimize.minimize(cost_prime, A[i], (B, I[i]), method='CG', tol=0.01, options={'maxiter':100})
-            # print(res.message)
-            # print(str.format('iters: {}', res.nit))
-            # print(res.x)
-            # A[i] = res.x
+        gradient = -2.0 * (R.transpose()).dot((subimages - reconstructed_images))
 
-        # calculate residual error
+        # update coefficients
+        B = B - learning_rate * gradient
 
-        R = subimages - (sum(A) / batch_size).dot(B)
-
-        # update the base functions
-
-        dB = np.zeros((num_basis, basis_width * basis_height))
-
-        for i in range(batch_size):
-            dB = dB + R[i].dot(A[i])
-
-        dB = dB / batch_size
-
-        B = B + learning_rate * dB
+        normalize(B)
 
         print(str.format('iteration: {}/{}', j + 1, num_iterations))
 
-    plt.imshow(B[0].reshape((basis_height, basis_width)))
-    plt.show()
+        if (j + 1) % 10 == 0:
+            graph_edge = int(math.sqrt(num_basis))
+            fig, axes = plt.subplots(graph_edge, graph_edge)
+
+            for r in range(num_basis):
+                yindex = int(math.floor(r / graph_edge))
+                xindex = int(r % graph_edge)
+
+                axes[yindex, xindex].imshow(B[r].reshape((basis_height, basis_width)), cmap='gray')
+
+            fig.savefig(str.format('images/iteration_{}', j + 1), dpi=400)
