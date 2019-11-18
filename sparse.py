@@ -49,9 +49,6 @@ if __name__ == "__main__":
     mat = scipy.io.loadmat('IMAGES.mat')
     mat = np.array(np.transpose(mat['IMAGES'], (2,0,1)))
 
-    #mat -= mat.min()
-    #mat *= 1/mat.max()
-
     B = np.random.rand(num_basis, basis_height * basis_width)
     B = normalize(B)
 
